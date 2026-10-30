@@ -86,6 +86,56 @@ function paragraphsOf(el) {
   return Array.from(el.getElementsByTagNameNS(NS.a, 'p')).map(textOfParagraph);
 }
 
+function ownParagraphs(txBody) {
+  return Array.from(txBody.childNodes).filter((n) => n.localName === 'p' && n.namespaceURI === NS.a);
+}
+
+// Replace the text of a paragraph but keep its paragraph properties and the
+// formatting of its first run. Line breaks in the text become a:br.
+function setParagraphText(doc, p, text) {
+  const children = Array.from(p.childNodes);
+  const firstRun = children.find((n) => n.localName === 'r' || n.localName === 'fld');
+  let rPr = firstRun ? firstRun.getElementsByTagNameNS(NS.a, 'rPr')[0] : null;
+  const endPara = children.find((n) => n.localName === 'endParaRPr');
+  if (!rPr) {
+    rPr = doc.createElementNS(NS.a, 'a:rPr');
+    if (endPara) for (const attr of Array.from(endPara.attributes)) rPr.setAttribute(attr.name, attr.value);
+  }
+  for (const n of children) {
+    if (n.localName === 'r' || n.localName === 'fld' || n.localName === 'br') p.removeChild(n);
+  }
+  const lines = text.split('\n');
+  lines.forEach((line, i) => {
+    if (i > 0) {
+      const br = doc.createElementNS(NS.a, 'a:br');
+      br.appendChild(rPr.cloneNode(true));
+      p.insertBefore(br, endPara || null);
+    }
+    if (line.length > 0) {
+      const r = doc.createElementNS(NS.a, 'a:r');
+      r.appendChild(rPr.cloneNode(true));
+      const t = doc.createElementNS(NS.a, 'a:t');
+      t.textContent = line;
+      r.appendChild(t);
+      p.insertBefore(r, endPara || null);
+    }
+  });
+}
+
+function setShapeParagraphs(doc, txBody, texts) {
+  const paras = ownParagraphs(txBody);
+  const last = paras[paras.length - 1];
+  texts.forEach((text, i) => {
+    let p = paras[i];
+    if (!p) {
+      p = last.cloneNode(true);
+      txBody.appendChild(p);
+    }
+    setParagraphText(doc, p, text);
+  });
+  for (let i = texts.length; i < paras.length; i++) txBody.removeChild(paras[i]);
+}
+
 function placeholderType(sp) {
   const ph = sp.getElementsByTagNameNS(NS.p, 'ph')[0];
   if (!ph) return null;
@@ -120,13 +170,22 @@ export async function readPptx(JSZip, data) {
 
     let title = '';
     const body = [];
+    // Editable text: one entry per text shape, with its paragraphs. The index counts
+    // shapes that have a text body, in document order; writePptx uses the same count.
+    const shapes = [];
+    let shapeIndex = -1;
     for (const sp of Array.from(doc.getElementsByTagNameNS(NS.p, 'sp'))) {
       const txBody = sp.getElementsByTagNameNS(NS.p, 'txBody')[0];
       if (!txBody) continue;
+      shapeIndex++;
       const lines = paragraphsOf(txBody).map((l) => l.trim()).filter(Boolean);
       const type = placeholderType(sp);
-      if ((type === 'title' || type === 'ctrTitle') && !title) title = lines.join(' ');
+      const isTitle = type === 'title' || type === 'ctrTitle';
+      if (isTitle && !title) title = lines.join(' ');
       else body.push(...lines);
+      if (lines.length > 0) {
+        shapes.push({ index: shapeIndex, isTitle, paragraphs: ownParagraphs(txBody).map(textOfParagraph) });
+      }
     }
     // Tables and grouped shapes also carry text in a:t; pick it up for search and PDF matching.
     for (const tbl of Array.from(doc.getElementsByTagNameNS(NS.a, 'tbl'))) {
@@ -158,6 +217,7 @@ export async function readPptx(JSZip, data) {
       title: title || '(untitled)',
       hasTitle: Boolean(title),
       body,
+      shapes,
       layoutType,
       hidden: doc.documentElement.getAttribute('show') === '0',
       notes,
@@ -300,7 +360,8 @@ async function createNotesSlide(zip, slidePath, notesMasterPath, text) {
 }
 
 // Write a new .pptx from the original bytes and the plan.
-// plan = { groups: [{ name, slideIds }], cut: Set of slide ids, notes: { [slideId]: text } }
+// plan = { groups: [{ name, slideIds }], cut: Set of slide ids, notes: { [slideId]: text },
+//          texts: { [slideId]: { [shapeIndex]: [paragraph texts] } } }
 // Only notes listed in plan.notes are rewritten; others keep their original formatting.
 export async function writePptx(JSZip, data, info, plan) {
   const zip = await JSZip.loadAsync(data);
@@ -353,13 +414,26 @@ export async function writePptx(JSZip, data, info, plan) {
   extLst.insertBefore(ext, extLst.firstChild);
   zip.file(presPath, serializeXml(pres));
 
-  // 3. Hidden flag for cut slides (kept in the file, skipped in the slide show).
+  // 3. Hidden flag for cut slides (kept in the file, skipped in the slide show)
+  //    and edited slide text.
+  const texts = plan.texts || {};
   for (const s of info.slides) {
     const shouldHide = plan.cut.has(s.id);
-    if (shouldHide === s.hidden) continue;
+    const edits = texts[s.id];
+    const hasEdits = edits && Object.keys(edits).length > 0;
+    if (shouldHide === s.hidden && !hasEdits) continue;
     const doc = await readXml(zip, s.path);
     if (shouldHide) doc.documentElement.setAttribute('show', '0');
     else doc.documentElement.removeAttribute('show');
+    if (hasEdits) {
+      const textShapes = Array.from(doc.getElementsByTagNameNS(NS.p, 'sp'))
+        .map((sp) => sp.getElementsByTagNameNS(NS.p, 'txBody')[0])
+        .filter(Boolean);
+      for (const [index, paragraphs] of Object.entries(edits)) {
+        const txBody = textShapes[Number(index)];
+        if (txBody && paragraphs.length > 0) setShapeParagraphs(doc, txBody, paragraphs);
+      }
+    }
     zip.file(s.path, serializeXml(doc));
   }
 

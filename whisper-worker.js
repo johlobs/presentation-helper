@@ -30,7 +30,7 @@ async function load(model) {
 }
 
 self.onmessage = async (event) => {
-  const { type, audio, language, model, requestId } = event.data;
+  const { type, audio, language, task, model, requestId } = event.data;
   try {
     if (type === 'load') {
       await load(model);
@@ -42,7 +42,7 @@ self.onmessage = async (event) => {
       self.postMessage({ type: 'working', requestId });
       const out = await transcriber(audio, {
         language,
-        task: 'transcribe',
+        task: task || 'transcribe',
         chunk_length_s: 30,
         stride_length_s: 5,
       });

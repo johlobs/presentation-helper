@@ -157,3 +157,26 @@ textarea.notes { min-height: 16rem; line-height: 1.45; }
   position: fixed; bottom: 1.2rem; left: 50%; transform: translateX(-50%);
   background: var(--dark); color: #fff; padding: 0.6rem 1rem; border-radius: 8px; z-index: 20; max-width: 90vw;
 }
+
+/* Editable slide text */
+.shape-box { border: 1px solid var(--line); border-radius: 6px; padding: 0.4rem 0.5rem; margin-bottom: 0.5rem; background: #f9fafb; }
+.shape-label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 0.25rem; }
+.para-row { display: flex; gap: 0.25rem; align-items: flex-start; margin-bottom: 0.25rem; }
+.para-row textarea.para { flex: 1; resize: none; overflow: hidden; padding: 0.3rem 0.45rem; font-size: 0.9rem; line-height: 1.35; background: #fff; }
+.title-box textarea.para { font-weight: 600; font-size: 1rem; }
+.icon-btn:disabled { opacity: 0.3; cursor: default; }
+
+/* Translation panel */
+.translate-panel { border: 1px solid #c7d2fe; background: #f8faff; border-radius: 8px; padding: 0.6rem 0.8rem; margin-top: 0.5rem; }
+.tp-head { display: flex; justify-content: space-between; gap: 0.5rem; align-items: flex-start; margin-bottom: 0.4rem; font-size: 0.9rem; }
+.tp-section { margin-top: 0.5rem; }
+.tp-title { font-weight: 600; margin-bottom: 0.3rem; }
+.tp-cand { display: flex; justify-content: space-between; align-items: center; gap: 0.6rem; padding: 0.35rem 0.5rem; background: #fff; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 0.3rem; }
+.tp-cand.main { border-color: var(--accent); }
+.tp-text { flex: 1; min-width: 0; }
+.tp-actions { display: flex; gap: 0.25rem; flex-shrink: 0; }
+.tp-alts { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.3rem 0; }
+.alt-chip { border: 1px solid #cbd5e1; background: #fff; border-radius: 999px; padding: 0.15rem 0.6rem; cursor: pointer; font: inherit; font-size: 0.85rem; text-align: left; }
+.alt-chip.on { border-color: var(--accent); background: #eff6ff; }
+.tp-links { margin-top: 0.4rem; }
+.error-text { color: var(--cut); }

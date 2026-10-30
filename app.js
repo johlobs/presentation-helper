@@ -1,5 +1,6 @@
 import { readPptx, writePptx, suggestGroups } from './pptx.js';
 import * as store from './store.js';
+import { googleTranslate, joinSegments, myMemoryTranslate, externalLinks } from './translate.js';
 
 const $ = (id) => document.getElementById(id);
 const GROUP_COLORS = ['#2563eb', '#0d9488', '#7c3aed', '#db2777', '#ea580c', '#65a30d', '#0891b2', '#9333ea', '#ca8a04', '#475569'];
@@ -221,6 +222,12 @@ $('homeBtn').addEventListener('click', showHome);
 async function openProject(id) {
   project = await store.getProject(id);
   originalBytes = await store.getFile(id + ':original');
+  if (project.info.slides.some((s) => !s.shapes)) {
+    const fresh = await readPptx(JSZip, originalBytes);
+    const freshById = Object.fromEntries(fresh.slides.map((s) => [s.id, s]));
+    for (const s of project.info.slides) s.shapes = freshById[s.id] ? freshById[s.id].shapes : [];
+    await store.putProject(project);
+  }
   byId = Object.fromEntries(project.info.slides.map((s) => [s.id, s]));
   selectedId = orderedSlideIds()[0];
   filter = 'all';
@@ -283,7 +290,7 @@ function slideRowHtml(id, indexInGroup, nums) {
       <span class="handle slide-handle" title="Drag to move">⠿</span>
       <span class="num" title="Number in the show (original ${s.originalIndex + 1})">${nums[id] || '–'}</span>
       ${thumb ? `<img class="thumb" src="${thumb}" alt="">` : ''}
-      <span class="s-title" title="${esc(s.title)}">${esc(s.title)}</span>
+      <span class="s-title" title="${esc(titleOf(id))}">${esc(titleOf(id))}</span>
       <span class="badges">
         ${notesEdited(id) ? '<span class="dot" title="Notes edited">✎</span>' : ''}
         ${state.minutes != null ? `<span class="dot">${minutesLabel(state.minutes)}</span>` : ''}
@@ -390,7 +397,7 @@ $('groups').addEventListener('click', (e) => {
     const moved = g.slideIds.splice(at);
     const share = g.minutes ? Math.round((g.minutes * moved.length / (moved.length + g.slideIds.length)) * 2) / 2 : 0;
     g.minutes = Math.max(0, (g.minutes || 0) - share);
-    project.groups.splice(gi + 1, 0, { id: uid(), name: byId[sid].title, slideIds: moved, collapsed: false, minutes: share });
+    project.groups.splice(gi + 1, 0, { id: uid(), name: titleOf(sid), slideIds: moved, collapsed: false, minutes: share });
     changed();
     renderAll();
     return;
@@ -493,10 +500,10 @@ function renderDetail() {
       <span class="small">${pos + 1} of ${order.length}</span>
       <button class="btn ghost small" id="nextBtn" ${pos >= order.length - 1 ? 'disabled' : ''}>Next →</button>
     </div>
-    <h2>${esc(s.title)}</h2>
+    <h2>${esc(titleOf(id))}</h2>
     <div class="sub">${nums[id] ? 'Slide ' + nums[id] + ' in the show' : 'Cut (hidden in the show)'} · originally slide ${s.originalIndex + 1} · group “${esc(g ? g.name : '')}”</div>
     ${project.thumbs[id] ? `<img class="big-thumb" src="${project.thumbs[id]}" alt="Slide preview">` : ''}
-    ${s.body.length ? `<div class="slide-text"><ul>${s.body.map((l) => `<li>${esc(l)}</li>`).join('')}</ul></div>` : ''}
+    ${slideTextHtml(id)}
 
     <div class="field">
       <span class="field-title">Decision</span>
@@ -521,20 +528,22 @@ function renderDetail() {
         <span class="field-title" style="margin:0">Speaker notes</span>
         <span class="changed-flag" id="notesFlag">${notesEdited(id) ? 'edited, written to the pptx on save' : ''}</span>
         <span class="spacer"></span>
-        <span class="lang-toggle" title="Language for dictation and spell checking">
-          <button data-lang="sv" class="${lang === 'sv' ? 'on' : ''}">SV</button><button data-lang="en" class="${lang === 'en' ? 'on' : ''}">EN</button>
+        <button class="btn small" id="translateBtn" title="Translate the selected text, or all notes if nothing is selected, from Swedish to English">Translate SV→EN</button>
+        <span class="lang-toggle" title="Dictation language. SV→EN: speak Swedish, get English text">
+          <button data-lang="sv" class="${lang === 'sv' ? 'on' : ''}">SV</button><button data-lang="en" class="${lang === 'en' ? 'on' : ''}">EN</button><button data-lang="svEn" class="${lang === 'svEn' ? 'on' : ''}">SV→EN</button>
         </span>
         <button class="btn small mic-btn ${recordingHere ? 'recording' : ''}" id="micBtn">${recordingHere ? '■ Stop' : '🎙 Dictate'}</button>
       </div>
       <textarea id="notesBox" class="notes" lang="${lang === 'sv' ? 'sv' : 'en'}" placeholder="No notes yet.">${esc(notesOf(id))}</textarea>
       <div class="asr-status" id="asrStatus">${esc(asrStatusText)}</div>
+      <div class="translate-panel" id="translatePanel" hidden></div>
       <div class="inline small" style="justify-content:space-between;margin-top:0.3rem">
         <label>Speech model <select id="modelSelect" class="small">
           ${Object.entries(MODELS).map(([k, v]) => `<option value="${k}" ${k === model ? 'selected' : ''}>${v}</option>`).join('')}
         </select></label>
         ${notesEdited(id) ? '<button class="link-btn" id="revertNotes">Revert to the notes in the file</button>' : ''}
       </div>
-      <p class="small">Dictated text is inserted where the cursor is in the notes, or at the end if you have not clicked in them. The speech model runs in this browser and is downloaded the first time you dictate. Edited notes are saved as plain text in the pptx; notes you do not edit keep their formatting.</p>
+      <p class="small">Dictated text is inserted where the cursor is in the notes, or at the end if you have not clicked in them. The speech model runs in this browser and is downloaded the first time you dictate. Translation sends the selected text (or all the notes) to Google Translate and MyMemory. Edited notes are saved as plain text in the pptx; notes you do not edit keep their formatting.</p>
     </div>`;
 
   notesCursorTouched = false;
@@ -570,8 +579,124 @@ function renderDetail() {
   }
   $('modelSelect').onchange = (e) => localStorage.setItem('asrModel', e.target.value);
   $('micBtn').onclick = () => toggleRecording(id);
+  $('translateBtn').onclick = () => startTranslation(id);
+  if (translation && translation.slideId === id) renderTranslation();
+  bindSlideText(id);
   const revert = $('revertNotes');
   if (revert) revert.onclick = () => { state.notes = null; changed(); renderOutline(); renderDetail(); };
+}
+
+// ---------- slide title and text editing ----------
+
+function shapeParagraphs(id, shape) {
+  const edits = st(id).text || {};
+  return edits[shape.index] ? edits[shape.index] : shape.paragraphs;
+}
+
+function slideTextEdited(id) {
+  return Object.keys(st(id).text || {}).length > 0;
+}
+
+function titleOf(id) {
+  const s = byId[id];
+  const titleShape = (s.shapes || []).find((sh) => sh.isTitle);
+  if (!titleShape) return s.title;
+  const text = shapeParagraphs(id, titleShape).join(' ').replace(/\s+/g, ' ').trim();
+  return text || '(untitled)';
+}
+
+function slideTextHtml(id) {
+  const s = byId[id];
+  const shapes = s.shapes || [];
+  if (shapes.length === 0) {
+    return '<div class="field"><span class="field-title">Slide text</span><div class="small">This slide has no editable text (pictures, charts or tables only).</div></div>';
+  }
+  let bodyCount = 0;
+  const boxes = shapes.map((shape) => {
+    const label = shape.isTitle ? 'Title' : `Text box ${++bodyCount}`;
+    const paras = shapeParagraphs(id, shape);
+    const rows = paras.map((text, pi) => `
+      <div class="para-row">
+        <textarea class="para" rows="1" lang="en" data-shape="${shape.index}" data-p="${pi}">${esc(text)}</textarea>
+        ${shape.isTitle ? '' : `<button class="icon-btn" data-act="add" data-shape="${shape.index}" data-p="${pi}" title="Add a paragraph after this one">+</button>
+        <button class="icon-btn" data-act="del" data-shape="${shape.index}" data-p="${pi}" title="Remove this paragraph" ${paras.length < 2 ? 'disabled' : ''}>✕</button>`}
+      </div>`).join('');
+    return `<div class="shape-box ${shape.isTitle ? 'title-box' : ''}"><div class="shape-label">${label}</div>${rows}</div>`;
+  }).join('');
+  return `
+    <div class="field" id="slideTextField">
+      <div class="notes-bar">
+        <span class="field-title" style="margin:0">Slide text</span>
+        <span class="changed-flag">${slideTextEdited(id) ? 'edited, written to the pptx on save' : ''}</span>
+        <span class="spacer"></span>
+        ${slideTextEdited(id) ? '<button class="link-btn small" data-act="revert-text">Revert to the text in the file</button>' : ''}
+      </div>
+      ${boxes}
+      <p class="small">Each box is one paragraph (one bullet). Edited paragraphs keep the formatting of their first word; mixed formatting inside a paragraph (e.g. one bold word) is lost when you edit it.</p>
+    </div>`;
+}
+
+function autosize(el) {
+  el.style.height = 'auto';
+  el.style.height = el.scrollHeight + 2 + 'px';
+}
+
+function readShapeFromDom(id, shapeIndex) {
+  const field = $('slideTextField');
+  const values = Array.from(field.querySelectorAll(`textarea.para[data-shape="${shapeIndex}"]`)).map((t) => t.value);
+  setShapeText(id, shapeIndex, values);
+}
+
+function setShapeText(id, shapeIndex, values) {
+  const shape = byId[id].shapes.find((sh) => sh.index === Number(shapeIndex));
+  const state = st(id);
+  state.text = state.text || {};
+  const same = values.length === shape.paragraphs.length && values.every((v, i) => v === shape.paragraphs[i]);
+  if (same) delete state.text[shape.index];
+  else state.text[shape.index] = values;
+  changed();
+}
+
+function bindSlideText(id) {
+  const field = $('slideTextField');
+  if (!field) return;
+  for (const t of field.querySelectorAll('textarea.para')) autosize(t);
+  field.addEventListener('input', (e) => {
+    const t = e.target.closest('textarea.para');
+    if (!t) return;
+    autosize(t);
+    readShapeFromDom(id, t.dataset.shape);
+    field.querySelector('.changed-flag').textContent = slideTextEdited(id) ? 'edited, written to the pptx on save' : '';
+  });
+  field.addEventListener('change', (e) => {
+    if (e.target.closest('textarea.para')) {
+      renderOutline();
+      document.querySelector('#detail h2').textContent = titleOf(id);
+    }
+  });
+  field.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-act]');
+    if (!b) return;
+    const act = b.dataset.act;
+    if (act === 'revert-text') {
+      st(id).text = {};
+      changed();
+      renderOutline();
+      renderDetail();
+      return;
+    }
+    const shape = byId[id].shapes.find((sh) => sh.index === Number(b.dataset.shape));
+    const values = shapeParagraphs(id, shape).slice();
+    const pi = Number(b.dataset.p);
+    if (act === 'add') values.splice(pi + 1, 0, '');
+    if (act === 'del' && values.length > 1) values.splice(pi, 1);
+    setShapeText(id, shape.index, values);
+    renderDetail();
+    if (act === 'add') {
+      const next = $('slideTextField').querySelector(`textarea.para[data-shape="${shape.index}"][data-p="${pi + 1}"]`);
+      if (next) next.focus();
+    }
+  });
 }
 
 function setNotes(id, text) {
@@ -673,7 +798,8 @@ async function toggleRecording(slideId) {
       setAsrStatus('Transcribing…');
       getWorker().postMessage({
         type: 'transcribe', audio, requestId, model,
-        language: lang === 'sv' ? 'swedish' : 'english',
+        language: lang === 'en' ? 'english' : 'swedish',
+        task: lang === 'svEn' ? 'translate' : 'transcribe',
       }, [audio.buffer]);
     } catch (err) {
       setAsrStatus('Could not process the recording: ' + err.message, true);
@@ -725,6 +851,149 @@ function insertDictation(requestId, text) {
   renderOutline();
 }
 
+// ---------- translation (Swedish to English, several alternatives) ----------
+
+let translation = null;
+
+async function startTranslation(slideId) {
+  const box = $('notesBox');
+  const notes = notesOf(slideId);
+  let start = box.selectionStart;
+  let end = box.selectionEnd;
+  if (start === end) { start = 0; end = notes.length; }
+  const source = notes.slice(start, end).trim();
+  if (!source) { setAsrStatus('Nothing to translate. Write or select some Swedish text first.'); return; }
+  // Keep the trimmed range so Replace does not remove surrounding spaces.
+  start = notes.indexOf(source, start);
+  end = start + source.length;
+  const isWord = !/\s/.test(source);
+  translation = { slideId, start, end, source, isWord, google: null, googleError: null, chosen: [], mm: null, mmError: null, loading: true };
+  renderTranslation();
+  const [g, m] = await Promise.allSettled([googleTranslate(source), myMemoryTranslate(source)]);
+  if (!translation || translation.source !== source) return;
+  translation.loading = false;
+  if (g.status === 'fulfilled') translation.google = g.value; else translation.googleError = g.reason.message;
+  if (m.status === 'fulfilled') translation.mm = m.value; else translation.mmError = m.reason.message;
+  renderTranslation();
+}
+
+function translationCandidates() {
+  const t = translation;
+  const list = [];
+  if (t.google) {
+    const composed = t.google.segments.length ? joinSegments(t.google.segments, t.chosen) : t.google.main;
+    list.push({ text: composed, kind: 'main' });
+    for (const d of t.google.dictionary) {
+      for (const e of d.entries) list.push({ text: e.word, kind: 'dict', pos: d.pos, back: e.back });
+    }
+  }
+  for (const m of t.mm || []) list.push({ text: m.text, kind: 'mm', source: m.source });
+  return list;
+}
+
+function renderTranslation() {
+  const panel = $('translatePanel');
+  if (!panel || !translation || translation.slideId !== selectedId) return;
+  const t = translation;
+  panel.hidden = false;
+  const short = t.source.length > 160 ? t.source.slice(0, 160) + '…' : t.source;
+  let html = `<div class="tp-head"><span><strong>Translating:</strong> “${esc(short)}”</span><button class="icon-btn" data-act="close" title="Close">✕</button></div>`;
+  if (t.loading) {
+    panel.innerHTML = html + '<div class="small">Asking Google Translate and MyMemory…</div>';
+    panel.onclick = (e) => { if (e.target.closest('[data-act=close]')) closeTranslation(); };
+    return;
+  }
+  const cands = translationCandidates();
+  const actions = (i) => `<span class="tp-actions"><button class="btn small" data-act="replace" data-i="${i}">Replace</button><button class="btn ghost small" data-act="insert" data-i="${i}">Insert after</button><button class="btn ghost small" data-act="copy" data-i="${i}">Copy</button></span>`;
+
+  html += '<div class="tp-section"><div class="tp-title">Google Translate</div>';
+  if (t.googleError) html += `<div class="small error-text">Not available: ${esc(t.googleError)}</div>`;
+  cands.forEach((c, i) => {
+    if (c.kind === 'main') html += `<div class="tp-cand main"><span class="tp-text">${esc(c.text)}</span>${actions(i)}</div>`;
+  });
+  if (t.google) {
+    if (t.google.segments.some((seg) => seg.options.length > 1)) {
+      html += '<div class="small">Other wordings. Click one to use it in the translation above:</div>';
+      t.google.segments.forEach((seg, si) => {
+        if (seg.options.length < 2) return;
+        html += '<div class="tp-alts">' + seg.options.map((o, oi) =>
+          `<button class="alt-chip ${(t.chosen[si] || 0) === oi ? 'on' : ''}" data-act="alt" data-seg="${si}" data-opt="${oi}">${esc(o)}</button>`).join('') + '</div>';
+      });
+    }
+    const dict = cands.map((c, i) => [c, i]).filter(([c]) => c.kind === 'dict');
+    if (dict.length) {
+      html += '<div class="small" style="margin-top:0.4rem">Dictionary meanings (← the Swedish words each one can translate):</div>';
+      for (const [c, i] of dict) {
+        html += `<div class="tp-cand"><span class="tp-text"><strong>${esc(c.text)}</strong> <span class="small">${esc(c.pos)} ← ${esc(c.back.slice(0, 6).join(', '))}</span></span>${actions(i)}</div>`;
+      }
+    }
+  }
+  html += '</div><div class="tp-section"><div class="tp-title">MyMemory <span class="small">(translation memories, quality varies)</span></div>';
+  if (t.mmError) html += `<div class="small error-text">Not available: ${esc(t.mmError)}</div>`;
+  else if (!t.mm || t.mm.length === 0) html += '<div class="small">No suggestions.</div>';
+  cands.forEach((c, i) => {
+    if (c.kind === 'mm') html += `<div class="tp-cand"><span class="tp-text">${esc(c.text)} <span class="small">· ${esc(c.source)}</span></span>${actions(i)}</div>`;
+  });
+  html += '</div><div class="tp-links small">Compare in: ' +
+    externalLinks(t.source, t.isWord).map((l) => `<a href="${l.url}" target="_blank" rel="noopener">${esc(l.label)}</a>`).join(' · ') + '</div>';
+  panel.innerHTML = html;
+
+  panel.onclick = async (e) => {
+    const b = e.target.closest('button[data-act]');
+    if (!b) return;
+    const act = b.dataset.act;
+    if (act === 'close') { closeTranslation(); return; }
+    if (act === 'alt') {
+      t.chosen[Number(b.dataset.seg)] = Number(b.dataset.opt);
+      renderTranslation();
+      return;
+    }
+    const text = translationCandidates()[Number(b.dataset.i)].text;
+    if (act === 'copy') {
+      await navigator.clipboard.writeText(text);
+      setAsrStatus('Copied.');
+      return;
+    }
+    applyTranslation(text, act === 'replace');
+  };
+}
+
+function applyTranslation(text, replace) {
+  const t = translation;
+  const notes = notesOf(t.slideId);
+  let start = t.start;
+  let end = t.end;
+  if (notes.slice(start, end) !== t.source) {
+    // The notes changed since translating: find the source text again, or add at the end.
+    const at = notes.indexOf(t.source);
+    if (at >= 0) { start = at; end = at + t.source.length; } else { start = notes.length; end = notes.length; replace = false; }
+  }
+  let updated;
+  let caret;
+  if (replace) {
+    updated = notes.slice(0, start) + text + notes.slice(end);
+    caret = start + text.length;
+  } else {
+    const sep = start === 0 && end === notes.length ? '\n\n' : ' ';
+    updated = notes.slice(0, end) + sep + text + notes.slice(end);
+    caret = end + sep.length + text.length;
+  }
+  setNotes(t.slideId, updated);
+  const box = $('notesBox');
+  box.value = updated;
+  box.focus();
+  box.setSelectionRange(caret, caret);
+  $('notesFlag').textContent = notesEdited(t.slideId) ? 'edited, written to the pptx on save' : '';
+  renderOutline();
+  if (replace) closeTranslation();
+}
+
+function closeTranslation() {
+  translation = null;
+  const panel = $('translatePanel');
+  if (panel) { panel.hidden = true; panel.innerHTML = ''; }
+}
+
 // ---------- save, download, backup ----------
 
 async function buildPptx() {
@@ -732,9 +1001,11 @@ async function buildPptx() {
     groups: project.groups.map((g) => ({ name: g.name, slideIds: g.slideIds })),
     cut: new Set(project.info.slides.filter((s) => decisionOf(s.id) === 'cut').map((s) => s.id)),
     notes: {},
+    texts: {},
   };
   for (const s of project.info.slides) {
     if (notesEdited(s.id)) plan.notes[s.id] = st(s.id).notes;
+    if (slideTextEdited(s.id)) plan.texts[s.id] = st(s.id).text;
   }
   const { bytes, skippedNotes } = await writePptx(JSZip, originalBytes, project.info, plan);
   await store.putFile(project.id + ':saved', bytes);
@@ -775,7 +1046,8 @@ $('downloadBtn').addEventListener('click', async () => {
   try {
     let bytes = await store.getFile(project.id + ':saved');
     if (!bytes || project.pptxDirty) bytes = await buildPptx();
-    const name = project.fileName.replace(/\.pptx$/i, '') + ' (planned).pptx';
+    const stamp = new Date().toLocaleString('sv-SE').slice(0, 16).replace(/[-: ]/g, '').replace(/^(\d{8})(\d{4})$/, '$1-$2');
+    const name = project.fileName.replace(/\.pptx$/i, '') + ` (planned ${stamp}).pptx`;
     downloadBytes(bytes, name, 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
   } catch (err) {
     console.error(err);

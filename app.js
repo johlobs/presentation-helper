@@ -529,21 +529,36 @@ function renderDetail() {
         <span class="changed-flag" id="notesFlag">${notesEdited(id) ? 'edited, written to the pptx on save' : ''}</span>
         <span class="spacer"></span>
         <button class="btn small" id="translateBtn" title="Translate the selected text, or all notes if nothing is selected, from Swedish to English">Translate SV→EN</button>
+      </div>
+      <textarea id="notesBox" class="notes" lang="en" placeholder="No notes yet.">${esc(notesOf(id))}</textarea>
+      <div class="translate-panel" id="translatePanel" hidden></div>
+      <div class="inline small" style="justify-content:space-between;margin-top:0.3rem">
+        <span>Only this box is written to the pptx. Edited notes are saved as plain text; notes you do not edit keep their formatting.</span>
+        ${notesEdited(id) ? '<button class="link-btn" id="revertNotes">Revert to the notes in the file</button>' : ''}
+      </div>
+    </div>
+
+    <div class="field draft-section">
+      <div class="notes-bar">
+        <span class="field-title" style="margin:0">Dictation <span class="small">(helper box, not saved to the pptx)</span></span>
+        <span class="spacer"></span>
         <span class="lang-toggle" title="Dictation language. SV→EN: speak Swedish, get English text">
           <button data-lang="sv" class="${lang === 'sv' ? 'on' : ''}">SV</button><button data-lang="en" class="${lang === 'en' ? 'on' : ''}">EN</button><button data-lang="svEn" class="${lang === 'svEn' ? 'on' : ''}">SV→EN</button>
         </span>
         <button class="btn small mic-btn ${recordingHere ? 'recording' : ''}" id="micBtn">${recordingHere ? '■ Stop' : '🎙 Dictate'}</button>
       </div>
-      <textarea id="notesBox" class="notes" lang="${lang === 'sv' ? 'sv' : 'en'}" placeholder="No notes yet.">${esc(notesOf(id))}</textarea>
+      <textarea id="draftBox" class="draft" lang="${lang === 'sv' ? 'sv' : 'en'}" placeholder="Press Dictate and speak. The transcription appears here, never directly in your notes.">${esc(st(id).draft || '')}</textarea>
       <div class="asr-status" id="asrStatus">${esc(asrStatusText)}</div>
-      <div class="translate-panel" id="translatePanel" hidden></div>
-      <div class="inline small" style="justify-content:space-between;margin-top:0.3rem">
-        <label>Speech model <select id="modelSelect" class="small">
+      <div class="draft-actions">
+        <button class="btn small primary" id="draftInsertBtn" title="Copies the selected text in this box (or all of it) into the notes where the notes cursor is, or at the end">Copy into notes at cursor</button>
+        <button class="btn small" id="draftAppendBtn" title="Copies the selected text in this box (or all of it) to the end of the notes">Copy to end of notes</button>
+        <button class="btn ghost small" id="draftClearBtn">Clear box</button>
+        <span class="spacer"></span>
+        <label class="small">Speech model <select id="modelSelect" class="small">
           ${Object.entries(MODELS).map(([k, v]) => `<option value="${k}" ${k === model ? 'selected' : ''}>${v}</option>`).join('')}
         </select></label>
-        ${notesEdited(id) ? '<button class="link-btn" id="revertNotes">Revert to the notes in the file</button>' : ''}
       </div>
-      <p class="small">Dictated text is inserted where the cursor is in the notes, or at the end if you have not clicked in them. The speech model runs in this browser and is downloaded the first time you dictate. Translation sends the selected text (or all the notes) to Google Translate and MyMemory. Edited notes are saved as plain text in the pptx; notes you do not edit keep their formatting.</p>
+      <p class="small">Each recording is added as a new paragraph at the end of this box. You can edit the text here, select part of it, and copy it into the notes above. The box is kept in this browser for each slide but is never written to the pptx. The speech model runs in this browser and is downloaded the first time you dictate. Translation sends the selected text (or all the notes) to Google Translate and MyMemory.</p>
     </div>`;
 
   notesCursorTouched = false;
@@ -579,6 +594,16 @@ function renderDetail() {
   }
   $('modelSelect').onchange = (e) => localStorage.setItem('asrModel', e.target.value);
   $('micBtn').onclick = () => toggleRecording(id);
+  const draft = $('draftBox');
+  draft.oninput = () => { state.draft = draft.value; changed({ pptx: false }); };
+  $('draftInsertBtn').onclick = () => copyDraftToNotes(id, true);
+  $('draftAppendBtn').onclick = () => copyDraftToNotes(id, false);
+  $('draftClearBtn').onclick = () => {
+    if (draft.value && !confirm('Clear the dictation box for this slide? Your notes are not affected.')) return;
+    state.draft = '';
+    draft.value = '';
+    changed({ pptx: false });
+  };
   $('translateBtn').onclick = () => startTranslation(id);
   if (translation && translation.slideId === id) renderTranslation();
   bindSlideText(id);
@@ -766,14 +791,11 @@ async function toggleRecording(slideId) {
     setAsrStatus('No microphone access: ' + err.message, true);
     return;
   }
-  const box = $('notesBox');
-  const current = notesOf(slideId);
-  const position = notesCursorTouched && box ? box.selectionEnd : current.length;
   const media = new MediaRecorder(stream);
   const chunks = [];
   const lang = localStorage.getItem('asrLang') || 'sv';
   const model = localStorage.getItem('asrModel') || 'Xenova/whisper-small';
-  recorder = { media, slideId, position, startedAt: Date.now() };
+  recorder = { media, slideId, startedAt: Date.now() };
   media.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
   media.onstop = async () => {
     stream.getTracks().forEach((t) => t.stop());
@@ -831,24 +853,43 @@ function insertDictation(requestId, text) {
   pendingInserts.delete(requestId);
   if (!info || !project || !byId[info.slideId]) return;
   if (!text) { setAsrStatus('No speech was recognised.'); return; }
-  const current = notesOf(info.slideId);
-  const pos = Math.min(info.position, current.length);
-  const before = current.slice(0, pos);
-  const after = current.slice(pos);
-  const lead = before && !/\s$/.test(before) ? ' ' : '';
+  const state = st(info.slideId);
+  const current = state.draft || '';
+  state.draft = current.trim() ? current.replace(/\s+$/, '') + '\n\n' + text : text;
+  changed({ pptx: false });
+  setAsrStatus('Transcription added to the dictation box. Copy what you want into the notes.');
+  if (selectedId === info.slideId) {
+    const draft = $('draftBox');
+    draft.value = state.draft;
+    draft.scrollTop = draft.scrollHeight;
+  }
+}
+
+// Copy the selected part of the dictation box (or all of it) into the notes.
+function copyDraftToNotes(id, atCursor) {
+  const draft = $('draftBox');
+  const selected = draft.value.slice(draft.selectionStart, draft.selectionEnd).trim();
+  const text = selected || draft.value.trim();
+  if (!text) { setAsrStatus('The dictation box is empty.'); return; }
+  const box = $('notesBox');
+  const notes = notesOf(id);
+  const pos = atCursor && notesCursorTouched ? box.selectionEnd : notes.length;
+  const before = notes.slice(0, pos);
+  const after = notes.slice(pos);
+  let lead = '';
+  if (before && !atCursor) lead = /\n$/.test(before) ? '\n' : '\n\n';
+  else if (before && !/\s$/.test(before)) lead = ' ';
   const trail = after && !/^\s/.test(after) ? ' ' : '';
   const updated = before + lead + text + trail + after;
-  setNotes(info.slideId, updated);
-  setAsrStatus('Dictation added to the notes.');
-  if (selectedId === info.slideId) {
-    const box = $('notesBox');
-    box.value = updated;
-    const caret = (before + lead + text).length;
-    box.focus();
-    box.setSelectionRange(caret, caret);
-    $('notesFlag').textContent = notesEdited(info.slideId) ? 'edited, written to the pptx on save' : '';
-  }
+  setNotes(id, updated);
+  box.value = updated;
+  const caret = (before + lead + text).length;
+  box.focus();
+  box.setSelectionRange(caret, caret);
+  notesCursorTouched = true;
+  $('notesFlag').textContent = notesEdited(id) ? 'edited, written to the pptx on save' : '';
   renderOutline();
+  setAsrStatus(selected ? 'Selected text copied into the notes.' : 'Dictation box copied into the notes.');
 }
 
 // ---------- translation (Swedish to English, several alternatives) ----------

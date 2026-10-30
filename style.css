@@ -180,3 +180,9 @@ textarea.notes { min-height: 16rem; line-height: 1.45; }
 .alt-chip.on { border-color: var(--accent); background: #eff6ff; }
 .tp-links { margin-top: 0.4rem; }
 .error-text { color: var(--cut); }
+
+/* Dictation helper box */
+.draft-section { border: 1px dashed #94a3b8; border-radius: 8px; padding: 0.6rem 0.7rem; background: #f8fafc; }
+textarea.draft { min-height: 7rem; background: #fffdf5; border-color: #e5d9a8; line-height: 1.45; }
+.draft-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; margin-top: 0.3rem; }
+.draft-actions .spacer { flex: 1; }

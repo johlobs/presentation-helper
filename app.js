@@ -4,10 +4,43 @@ import { googleTranslate, joinSegments, myMemoryTranslate, externalLinks } from 
 
 const $ = (id) => document.getElementById(id);
 const GROUP_COLORS = ['#2563eb', '#0d9488', '#7c3aed', '#db2777', '#ea580c', '#65a30d', '#0891b2', '#9333ea', '#ca8a04', '#475569'];
+// Speech models. The graphics card (WebGPU) ones are much faster where available;
+// the processor ones work in every browser. Keys of the processor models are kept
+// as before so earlier choices stored in the browser still work.
 const MODELS = {
-  'Xenova/whisper-small': 'Accurate (about 250 MB download)',
-  'Xenova/whisper-base': 'Fast (about 80 MB download)',
+  // fp32 encoder: fp16 gave garbage text on an AMD Radeon 780M, and the large-v3-turbo
+  // model ran out of memory on a 16 GB laptop, so small is the graphics card model.
+  'gpu-small': {
+    label: 'Graphics card: fast and accurate (about 600 MB first time)',
+    id: 'onnx-community/whisper-small', device: 'webgpu',
+    dtype: { encoder_model: 'fp32', decoder_model_merged: 'q4' }, gpu: true,
+  },
+  'Xenova/whisper-small': {
+    label: 'Processor: accurate (about 250 MB first time)',
+    id: 'Xenova/whisper-small', device: 'wasm', dtype: 'q8',
+  },
+  'Xenova/whisper-base': {
+    label: 'Processor: fast (about 80 MB first time)',
+    id: 'Xenova/whisper-base', device: 'wasm', dtype: 'q8',
+  },
 };
+const CPU_FALLBACK = 'Xenova/whisper-small';
+
+let gpuAvailable = false;
+const gpuCheck = (async () => {
+  try {
+    const adapter = navigator.gpu && await navigator.gpu.requestAdapter();
+    gpuAvailable = Boolean(adapter);
+  } catch (err) {
+    gpuAvailable = false;
+  }
+})();
+
+function currentModelKey() {
+  const stored = localStorage.getItem('asrModel');
+  if (stored && MODELS[stored] && (!MODELS[stored].gpu || gpuAvailable)) return stored;
+  return gpuAvailable ? 'gpu-small' : CPU_FALLBACK;
+}
 
 let project = null;
 let originalBytes = null;
@@ -491,7 +524,7 @@ function renderDetail() {
   const order = orderedSlideIds();
   const pos = order.indexOf(id);
   const lang = localStorage.getItem('asrLang') || 'sv';
-  const model = localStorage.getItem('asrModel') || 'Xenova/whisper-small';
+  const model = currentModelKey();
   const recordingHere = recorder && recorder.slideId === id;
 
   el.innerHTML = `
@@ -555,7 +588,7 @@ function renderDetail() {
         <button class="btn ghost small" id="draftClearBtn">Clear box</button>
         <span class="spacer"></span>
         <label class="small">Speech model <select id="modelSelect" class="small">
-          ${Object.entries(MODELS).map(([k, v]) => `<option value="${k}" ${k === model ? 'selected' : ''}>${v}</option>`).join('')}
+          ${Object.entries(MODELS).map(([k, v]) => `<option value="${k}" ${k === model ? 'selected' : ''} ${v.gpu && !gpuAvailable ? 'disabled' : ''}>${v.label}${v.gpu && !gpuAvailable ? ' (not available in this browser)' : ''}</option>`).join('')}
         </select></label>
       </div>
       <p class="small">Each recording is added as a new paragraph at the end of this box. You can edit the text here, select part of it, and copy it into the notes above. The box is kept in this browser for each slide but is never written to the pptx. The speech model runs in this browser and is downloaded the first time you dictate. Translation sends the selected text (or all the notes) to Google Translate and MyMemory.</p>
@@ -766,12 +799,22 @@ function getWorker() {
       } else if (msg.type === 'ready') {
         if (!recorder) setAsrStatus('Speech model ready.');
       } else if (msg.type === 'working') {
-        setAsrStatus('Transcribing…');
+        const job = pendingInserts.get(msg.requestId);
+        const where = job && MODELS[job.modelKey].gpu ? ' on the graphics card' : '';
+        setAsrStatus(`Transcribing${where}…`);
       } else if (msg.type === 'result') {
-        insertDictation(msg.requestId, msg.text);
+        insertDictation(msg.requestId, msg.text, msg.seconds);
       } else if (msg.type === 'error') {
+        const job = pendingInserts.get(msg.requestId);
         pendingInserts.delete(msg.requestId);
-        setAsrStatus('Dictation failed: ' + msg.message, true);
+        if (job && MODELS[job.modelKey].gpu && job.audioCopy) {
+          // The graphics card failed: try again on the processor with the same recording.
+          setAsrStatus('The graphics card could not be used (' + msg.message + '). Trying the processor instead…');
+          localStorage.setItem('asrModel', CPU_FALLBACK);
+          transcribe({ ...job, audio: job.audioCopy, modelKey: CPU_FALLBACK });
+        } else if (msg.requestId != null) {
+          setAsrStatus('Dictation failed: ' + msg.message, true);
+        }
       }
     };
   }
@@ -794,8 +837,8 @@ async function toggleRecording(slideId) {
   const media = new MediaRecorder(stream);
   const chunks = [];
   const lang = localStorage.getItem('asrLang') || 'sv';
-  const model = localStorage.getItem('asrModel') || 'Xenova/whisper-small';
-  recorder = { media, slideId, startedAt: Date.now() };
+  const model = currentModelKey();
+  recorder = { media, slideId, projectId: project.id, startedAt: Date.now() };
   media.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
   media.onstop = async () => {
     stream.getTracks().forEach((t) => t.stop());
@@ -815,25 +858,33 @@ async function toggleRecording(slideId) {
         for (let i = 0; i < audio.length; i++) mixed[i] = (audio[i] + other[i]) / 2;
         audio = mixed;
       }
-      const requestId = ++requestCounter;
-      pendingInserts.set(requestId, info);
-      setAsrStatus('Transcribing…');
-      getWorker().postMessage({
-        type: 'transcribe', audio, requestId, model,
+      transcribe({
+        info, audio, modelKey: model,
         language: lang === 'en' ? 'english' : 'swedish',
         task: lang === 'svEn' ? 'translate' : 'transcribe',
-      }, [audio.buffer]);
+      });
     } catch (err) {
       setAsrStatus('Could not process the recording: ' + err.message, true);
     }
   };
   media.start();
-  getWorker().postMessage({ type: 'load', model });
+  getWorker().postMessage({ type: 'load', model: MODELS[model] });
   const recordTimer = setInterval(() => {
     if (recorder) setAsrStatus(`Recording ${clock((Date.now() - recorder.startedAt) / 60000)}. Press Stop when you are done.`);
   }, 500);
   setAsrStatus('Recording 0:00. Press Stop when you are done.');
   renderDetailMicOnly();
+}
+
+function transcribe({ info, audio, modelKey, language, task }) {
+  const requestId = ++requestCounter;
+  // Keep a copy of the audio for a processor retry if the graphics card fails.
+  const audioCopy = MODELS[modelKey].gpu ? audio.slice() : null;
+  pendingInserts.set(requestId, { ...info, info, modelKey, language, task, audioCopy });
+  setAsrStatus('Transcribing…');
+  getWorker().postMessage({
+    type: 'transcribe', audio, requestId, model: MODELS[modelKey], language, task,
+  }, [audio.buffer]);
 }
 
 function renderDetailMicOnly() {
@@ -848,16 +899,32 @@ function stopRecordingIfAny() {
   if (recorder) recorder.media.stop();
 }
 
-function insertDictation(requestId, text) {
-  const info = pendingInserts.get(requestId);
-  pendingInserts.delete(requestId);
-  if (!info || !project || !byId[info.slideId]) return;
-  if (!text) { setAsrStatus('No speech was recognised.'); return; }
-  const state = st(info.slideId);
+function appendDraft(state, text) {
   const current = state.draft || '';
   state.draft = current.trim() ? current.replace(/\s+$/, '') + '\n\n' + text : text;
+}
+
+async function insertDictation(requestId, text, seconds) {
+  const job = pendingInserts.get(requestId);
+  pendingInserts.delete(requestId);
+  if (!job) return;
+  const info = job.info;
+  if (!text) { setAsrStatus('No speech was recognised.'); return; }
+  if (!project || project.id !== info.projectId) {
+    // The presentation is not open any more: save the text into it directly.
+    const stored = await store.getProject(info.projectId);
+    if (!stored || !stored.slideState[info.slideId]) return;
+    appendDraft(stored.slideState[info.slideId], text);
+    await store.putProject(stored);
+    toast('A finished transcription was saved in the dictation box of the slide where you recorded it.', 6000);
+    return;
+  }
+  const state = st(info.slideId);
+  appendDraft(state, text);
   changed({ pptx: false });
-  setAsrStatus('Transcription added to the dictation box. Copy what you want into the notes.');
+  const took = seconds ? ` (took ${Math.round(seconds)} s)` : '';
+  const elsewhere = selectedId !== info.slideId ? ` of slide “${titleOf(info.slideId)}”` : '';
+  setAsrStatus(`Transcription added to the dictation box${elsewhere}${took}. Copy what you want into the notes.`);
   if (selectedId === info.slideId) {
     const draft = $('draftBox');
     draft.value = state.draft;
@@ -1161,8 +1228,14 @@ $('pdfInput').addEventListener('change', async (e) => {
   }
 });
 
-window.addEventListener('beforeunload', () => {
+window.addEventListener('beforeunload', (e) => {
   if (project) store.putProject(project);
+  if (recorder || pendingInserts.size > 0) {
+    // Recordings only exist in memory until transcribed: ask before leaving.
+    e.preventDefault();
+    e.returnValue = '';
+  }
 });
 
+gpuCheck.then(() => { if (project && selectedId) renderDetail(); });
 showHome();

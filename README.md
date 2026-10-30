@@ -10,7 +10,7 @@ Live: https://johlobs.github.io/presentation-helper/
 - Time budget per group, or per slide, against a time slot, with start times and a timeline that shows overruns.
 - Keep / maybe / cut per slide with a short reason (decision log).
 - Edit slide titles and text paragraph by paragraph (add or remove bullets).
-- Speaker notes editor with dictation (Swedish or English) into a separate helper box, from which you copy text into the notes. Only the notes are written to the pptx. Dictation uses Whisper, which runs locally in the browser via transformers.js. The model is downloaded once and cached.
+- Speaker notes editor with dictation (Swedish or English) into a separate helper box, from which you copy text into the notes. Only the notes are written to the pptx. Dictation uses Whisper, which runs locally in the browser via transformers.js, on the graphics card (WebGPU, whisper-small, about 4 times faster) where available and otherwise on the processor. The model is downloaded once and cached.
 - Translation from Swedish to English of a selection or the whole notes, with several alternatives: Google Translate (alternative wordings per sentence, dictionary meanings for single words) and MyMemory (translation memories), plus links to DeepL, Google Translate and Glosbe. Dictation also has an SV→EN mode (speak Swedish, get English text).
 - Optional PDF export of the same deck for thumbnails. Pages are matched to slides by text, so hidden slides or a reordered export still work.
 - **Save & update pptx** rewrites the file: new slide order, groups as PowerPoint sections, cut slides hidden (not deleted), edited slide text and edited notes as plain text. Notes that are not edited keep their formatting. **Download pptx** downloads the result.

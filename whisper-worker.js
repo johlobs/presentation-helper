@@ -2,20 +2,24 @@
 // The model is downloaded once from Hugging Face and cached by the browser;
 // audio never leaves the computer.
 
-import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2';
+import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1';
 
 env.allowLocalModels = false;
 
 let asr = null;
-let loadedModel = null;
+let loadedKey = null;
 
+// model = { id, device: 'webgpu' | 'wasm', dtype }
 async function load(model) {
-  if (asr && loadedModel === model) return asr;
+  const key = JSON.stringify(model);
+  if (asr && loadedKey === key) return asr;
+  if (asr && asr.dispose) await asr.dispose();
   asr = null;
+  loadedKey = null;
   const files = {};
-  asr = await pipeline('automatic-speech-recognition', model, {
-    dtype: 'q8',
-    device: 'wasm',
+  asr = await pipeline('automatic-speech-recognition', model.id, {
+    dtype: model.dtype,
+    device: model.device,
     progress_callback: (p) => {
       if (p.status === 'progress' && p.total) {
         files[p.file] = { loaded: p.loaded, total: p.total };
@@ -25,7 +29,7 @@ async function load(model) {
       }
     },
   });
-  loadedModel = model;
+  loadedKey = key;
   return asr;
 }
 
@@ -40,15 +44,17 @@ self.onmessage = async (event) => {
     if (type === 'transcribe') {
       const transcriber = await load(model);
       self.postMessage({ type: 'working', requestId });
+      const started = performance.now();
       const out = await transcriber(audio, {
         language,
         task: task || 'transcribe',
         chunk_length_s: 30,
         stride_length_s: 5,
       });
-      self.postMessage({ type: 'result', text: (out.text || '').trim(), requestId });
+      self.postMessage({ type: 'result', text: (out.text || '').trim(), requestId, seconds: (performance.now() - started) / 1000 });
     }
   } catch (err) {
+    if (type === 'load') loadedKey = null;
     self.postMessage({ type: 'error', message: String(err && err.message ? err.message : err), requestId });
   }
 };

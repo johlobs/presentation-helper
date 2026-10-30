@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Presentation helper</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect x='1' y='2' width='14' height='9' rx='1' fill='%232563eb'/><rect x='7' y='11' width='2' height='3' fill='%231f2937'/></svg>">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <button id="homeBtn" class="link-btn" title="All presentations">Presentation helper</button>
+      <span id="projectName" class="project-name"></span>
+    </div>
+    <div class="actions" id="projectActions" hidden>
+      <span id="saveStatus" class="save-status"></span>
+      <button id="pdfBtn" class="btn ghost" title="Load a PDF export of the same deck to show slide thumbnails">Add PDF thumbnails</button>
+      <button id="backupBtn" class="btn ghost" title="Download the plan and the original file as one backup file">Backup</button>
+      <button id="saveBtn" class="btn">Save &amp; update pptx</button>
+      <button id="downloadBtn" class="btn primary">Download pptx</button>
+    </div>
+  </header>
+
+  <main id="home" class="home">
+    <section class="card intro">
+      <h1>Plan the order and content of a talk</h1>
+      <p>Open a PowerPoint file to group the slides, set a time budget, decide what to keep or cut, and work on the speaker notes (by typing or dictating).
+        <strong>Save &amp; update pptx</strong> writes the new order, sections, hidden slides and notes back into the file, and <strong>Download pptx</strong> gives you the updated file.</p>
+      <p class="privacy">Everything stays in this browser. The file is read and rewritten on your computer and is never uploaded. Dictation runs a speech model locally as well.</p>
+      <label class="dropzone" id="dropzone">
+        <input type="file" id="pptxInput" accept=".pptx" hidden>
+        <span class="dz-title">Open a .pptx file</span>
+        <span class="dz-sub">click or drop it here</span>
+      </label>
+      <p class="small">Restore from a backup: <label class="link-btn">choose backup file<input type="file" id="backupInput" accept=".json" hidden></label></p>
+    </section>
+    <section class="card">
+      <h2>Your presentations in this browser</h2>
+      <ul id="projectList" class="project-list"></ul>
+    </section>
+  </main>
+
+  <main id="planner" class="planner" hidden>
+    <section class="timing card">
+      <div class="timing-row">
+        <label>Time slot <input type="number" id="targetMinutes" min="1" step="1"> min</label>
+        <span id="timingSummary"></span>
+      </div>
+      <div class="timeline" id="timeline"></div>
+    </section>
+
+    <div class="columns">
+      <section class="outline card">
+        <div class="outline-tools">
+          <button id="addGroupBtn" class="btn ghost small">+ Group</button>
+          <button id="expandBtn" class="btn ghost small">Expand all</button>
+          <button id="collapseBtn" class="btn ghost small">Collapse all</button>
+          <select id="filterSelect" class="small" title="Show slides">
+            <option value="all">All slides</option>
+            <option value="keep">Keep</option>
+            <option value="maybe">Maybe</option>
+            <option value="cut">Cut</option>
+          </select>
+        </div>
+        <p class="hint">Drag ⠿ to move slides or whole groups. A group becomes a section in PowerPoint.</p>
+        <div id="groups"></div>
+      </section>
+
+      <section class="detail card" id="detail"></section>
+    </div>
+  </main>
+
+  <input type="file" id="pdfInput" accept=".pdf" hidden>
+  <div id="toast" class="toast" hidden></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

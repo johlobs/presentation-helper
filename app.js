@@ -309,7 +309,7 @@ function renderOutline() {
         <div class="group-head">
           <span class="handle group-handle" title="Drag to move the whole group">⠿</span>
           <button class="toggle" title="Show or hide slides">${g.collapsed ? '▸' : '▾'}</button>
-          <input class="group-name" value="${esc(g.name)}" title="Group name (becomes the section name in PowerPoint)">
+          <input class="group-name" spellcheck="false" value="${esc(g.name)}" title="Group name (becomes the section name in PowerPoint)">
           <span class="group-meta">${g.slideIds.length} sl. · starts ${startLabel}</span>
           <input type="number" class="group-min" min="0" step="0.5" value="${t.fromSlides ? Math.round(t.total * 10) / 10 : (g.minutes || 0)}"
             ${t.fromSlides ? 'disabled title="Sum of the minutes set on individual slides"' : 'title="Minutes for this group"'}>
@@ -508,7 +508,7 @@ function renderDetail() {
     </div>
     <div class="field">
       <label for="reasonBox">Why? <span class="small">(your decision log)</span></label>
-      <textarea id="reasonBox" rows="2" placeholder="E.g. strongest example for the policy point, or too detailed for this audience">${esc(state.reason)}</textarea>
+      <textarea id="reasonBox" rows="2" lang="${lang === 'sv' ? 'sv' : 'en'}" placeholder="E.g. strongest example for the policy point, or too detailed for this audience">${esc(state.reason)}</textarea>
     </div>
     <div class="field inline">
       <label for="slideMin" style="font-weight:600">Minutes for this slide</label>
@@ -521,12 +521,12 @@ function renderDetail() {
         <span class="field-title" style="margin:0">Speaker notes</span>
         <span class="changed-flag" id="notesFlag">${notesEdited(id) ? 'edited, written to the pptx on save' : ''}</span>
         <span class="spacer"></span>
-        <span class="lang-toggle" title="Language you will speak">
+        <span class="lang-toggle" title="Language for dictation and spell checking">
           <button data-lang="sv" class="${lang === 'sv' ? 'on' : ''}">SV</button><button data-lang="en" class="${lang === 'en' ? 'on' : ''}">EN</button>
         </span>
         <button class="btn small mic-btn ${recordingHere ? 'recording' : ''}" id="micBtn">${recordingHere ? '■ Stop' : '🎙 Dictate'}</button>
       </div>
-      <textarea id="notesBox" class="notes" placeholder="No notes yet.">${esc(notesOf(id))}</textarea>
+      <textarea id="notesBox" class="notes" lang="${lang === 'sv' ? 'sv' : 'en'}" placeholder="No notes yet.">${esc(notesOf(id))}</textarea>
       <div class="asr-status" id="asrStatus">${esc(asrStatusText)}</div>
       <div class="inline small" style="justify-content:space-between;margin-top:0.3rem">
         <label>Speech model <select id="modelSelect" class="small">
